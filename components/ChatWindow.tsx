@@ -9,8 +9,11 @@ import { ChatInput, type ChatInputHandle } from "./ChatInput";
 import { ChatMinimap, useMessageRefs } from "./ChatMinimap";
 import { useAgentSession, type AgentPhase, type NoticeItem } from "@/hooks/useAgentSession";
 import { useAudio } from "@/hooks/useAudio";
-import { useDragDrop } from "@/hooks/useDragDrop";
+import { splitDroppedFiles, useDragDrop } from "@/hooks/useDragDrop";
+import { useFileUpload } from "@/hooks/useFileUpload";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { buildFileAtMentionsText } from "@/lib/file-fuzzy";
+import { UploadFeedback } from "./UploadFeedback";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import {
   captureScrollDistance,
@@ -34,6 +37,7 @@ interface Props {
   onSessionStatsPanelOpen?: () => void;
   onContextUsageChange?: (usage: { percent: number | null; contextWindow: number; tokens: number | null } | null) => void;
   onOpenFile?: (filePath: string) => void;
+  onFilesUploaded?: () => void;
 }
 
 function phaseLabel(phase: AgentPhase): string {
@@ -140,7 +144,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, children }: { messag
   );
 }
 
-export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile }: Props) {
+export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile, onFilesUploaded }: Props) {
   const { soundEnabled, onSoundToggle, playDoneSound, unlockAudio } = useAudio();
   const isMobile = useIsMobile();
 
@@ -265,10 +269,21 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   }, [ctxKey, onContextUsageChange]);
   useEffect(() => () => { onContextUsageChange?.(null); }, [onContextUsageChange]);
 
+  const messageCwd = session?.cwd ?? newSessionCwd ?? undefined;
+  const handleFilesUploaded = useCallback((fileNames: string[]) => {
+    const mentions = buildFileAtMentionsText(fileNames);
+    if (mentions) chatInputRef?.current?.insertText(mentions);
+    onFilesUploaded?.();
+  }, [chatInputRef, onFilesUploaded]);
+  const fileUpload = useFileUpload({ targetDirectory: messageCwd, onUploaded: handleFilesUploaded });
+  const { prepareUpload } = fileUpload;
+
   const onDrop = useCallback((files: File[]) => {
     if (agentRunning) return;
-    chatInputRef?.current?.addImages(files);
-  }, [agentRunning, chatInputRef]);
+    const { images, documents } = splitDroppedFiles(files);
+    if (images.length > 0) chatInputRef?.current?.addImages(images);
+    if (documents.length > 0) void prepareUpload(documents);
+  }, [agentRunning, chatInputRef, prepareUpload]);
 
   const { isDragOver, handleDragEnter, handleDragOver, handleDragLeave, handleDrop } = useDragDrop(onDrop);
 
@@ -276,7 +291,6 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   const messageRefs = useMessageRefs(visibleMessages.length);
 
   const isEmptyNew = isNew && messages.length === 0 && !streamState.isStreaming && !agentRunning;
-  const messageCwd = session?.cwd ?? newSessionCwd ?? undefined;
 
   const availableThinkingLevels = displayModelValue
     ? (modelThinkingLevels[`${displayModelValue.provider}:${displayModelValue.modelId}`] ?? null)
@@ -326,6 +340,21 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     />
   );
 
+  const uploadFeedbackElement = (
+    <UploadFeedback
+      phase={fileUpload.phase}
+      progress={fileUpload.progress}
+      error={fileUpload.error}
+      summary={fileUpload.summary}
+      pendingConflict={fileUpload.pendingConflict}
+      onReplace={() => fileUpload.resolveConflict("overwrite")}
+      onSkip={() => fileUpload.resolveConflict("skip")}
+      onCancelConflict={fileUpload.cancelConflict}
+      onDismissError={fileUpload.dismissError}
+      onDismissSummary={fileUpload.dismissSummary}
+    />
+  );
+
   const aboveEditorWidgets = extensionWidgets.filter((widget) => widget.placement !== "belowEditor");
   const belowEditorWidgets = extensionWidgets.filter((widget) => widget.placement === "belowEditor");
 
@@ -364,24 +393,15 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
               />
             ))}
           </div>
-          <svg
-            width="280" height="280" viewBox="0 0 140 140" fill="none" xmlns="http://www.w3.org/2000/svg"
-            className="drop-shadow-[0_6px_18px_rgba(37,99,235,0.18)]"
-          >
-            <rect x="28" y="44" width="84" height="60" rx="8" fill="rgba(37,99,235,0.08)" stroke="rgba(37,99,235,0.50)" strokeWidth="1.8"/>
-            <path d="M36 100 L54 72 L68 88 L80 74 L104 100Z" fill="rgba(37,99,235,0.16)" stroke="rgba(37,99,235,0.40)" strokeWidth="1.4" strokeLinejoin="round"/>
-            <circle cx="96" cy="58" r="8" fill="rgba(37,99,235,0.22)" stroke="rgba(37,99,235,0.55)" strokeWidth="1.6"/>
-            <g stroke="rgba(37,99,235,0.45)" strokeWidth="1.4" strokeLinecap="round">
-              <line x1="96" y1="46" x2="96" y2="43"/>
-              <line x1="96" y1="70" x2="96" y2="73"/>
-              <line x1="84" y1="58" x2="81" y2="58"/>
-              <line x1="108" y1="58" x2="111" y2="58"/>
-              <line x1="87.5" y1="49.5" x2="85.4" y2="47.4"/>
-              <line x1="104.5" y1="66.5" x2="106.6" y2="68.6"/>
-              <line x1="104.5" y1="49.5" x2="106.6" y2="47.4"/>
-              <line x1="87.5" y1="66.5" x2="85.4" y2="68.6"/>
-            </g>
-          </svg>
+          <div style={{ display: "grid", placeItems: "center", gap: 12, color: "var(--accent)" }}>
+            <svg width="112" height="112" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" className="drop-shadow-[0_6px_18px_rgba(37,99,235,0.18)]" aria-hidden="true">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" fill="rgba(37,99,235,0.08)" />
+              <path d="M14 2v6h6" />
+              <path d="M12 18v-7" />
+              <path d="m8.5 14.5 3.5-3.5 3.5 3.5" />
+            </svg>
+            <span style={{ fontSize: 14, fontWeight: 650, letterSpacing: 0 }}>Drop files</span>
+          </div>
         </div>
       )}
 
@@ -428,6 +448,9 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
               </div>
             </div>
             <NoticeShelf notices={notices} align="right" />
+            <div style={{ marginBottom: fileUpload.phase !== "idle" || fileUpload.error || fileUpload.summary || fileUpload.pendingConflict ? 10 : 0 }}>
+              {uploadFeedbackElement}
+            </div>
             {chatInputElement}
           </div>
         </div>
@@ -661,6 +684,9 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
         >
           <div style={{ maxWidth: 820, margin: "0 auto" }}>
             <ExtensionWidgets widgets={belowEditorWidgets} />
+            <div style={{ marginBottom: fileUpload.phase !== "idle" || fileUpload.error || fileUpload.summary || fileUpload.pendingConflict ? 10 : 0 }}>
+              {uploadFeedbackElement}
+            </div>
           </div>
         </div>
         {chatInputElement}

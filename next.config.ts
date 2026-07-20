@@ -10,6 +10,7 @@ try {
 } catch { /* package not found, use default */ }
 
 const nextConfig: NextConfig = {
+  outputFileTracingRoot: __dirname,
   serverExternalPackages: [
     "@earendil-works/pi-coding-agent",
     "@earendil-works/pi-ai",
@@ -19,9 +20,37 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
+        source: "/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Referrer-Policy", value: "same-origin" },
+        ],
+      },
+      {
         source: "/",
         headers: [
-          { key: "Cache-Control", value: "private, no-cache, max-age=0, must-revalidate" },
+          { key: "Cache-Control", value: "private, no-store" },
+        ],
+      },
+      {
+        source: "/login",
+        headers: [
+          { key: "Cache-Control", value: "private, no-store" },
+        ],
+      },
+      {
+        source: "/sw.js",
+        headers: [
+          { key: "Content-Type", value: "application/javascript; charset=utf-8" },
+          { key: "Cache-Control", value: "no-cache, no-store, must-revalidate" },
+          { key: "Content-Security-Policy", value: "default-src 'self'; script-src 'self'" },
+        ],
+      },
+      {
+        source: "/manifest.webmanifest",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=3600" },
         ],
       },
     ];

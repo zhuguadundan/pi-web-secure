@@ -1,177 +1,121 @@
 # Release Checklist
 
-This repo publishes two artifacts for each release:
+This repository is a private-by-default fork of `agegr/pi-web`. Its `package.json` uses `"private": true` so a maintainer cannot accidentally publish an enhanced build under the upstream npm identity.
 
-- npm package: `@agegr/pi-web`
-- GitHub Release: `agegr/pi-web`
+Use this checklist from a clean branch when creating a GitHub release for your fork.
 
-Use this checklist from a clean `main` checkout.
+## 1. Configure repository identity
 
-## 1. Preflight
+Before the first release, replace the placeholders below with your own GitHub repository details:
 
 ```bash
-git status --short --branch
-git log --oneline --decorate -5
-gh auth status
-npm whoami
-node -e "const p=require('./package.json'); console.log(p.version)"
+git remote -v
+git remote get-url origin
+```
+
+The recommended remote layout is:
+
+```text
+origin    your enhanced fork
+upstream  https://github.com/agegr/pi-web.git
+```
+
+If the checkout still uses upstream as `origin`:
+
+```bash
+git remote rename origin upstream
+git remote add origin git@github.com:zhuguadundan/pi-web-secure.git
+```
+
+Do not publish to `agegr/pi-web` or `@agegr/pi-web` unless you are an authorized upstream maintainer following the upstream release process.
+
+## 2. Review sensitive and machine-specific data
+
+```bash
+git status --short
+git diff --check
+git diff --stat
+```
+
+Confirm that the commit does not include:
+
+- `.env.local` or any real password.
+- API keys, provider credentials, or authentication cookies.
+- Pi session files or personal project files.
+- Local service definitions containing personal paths or addresses.
+- `.next`, `node_modules`, logs, temporary files, or test uploads.
+
+The repository `.gitignore` excludes `.env*` and common build output, but always inspect the staged diff rather than relying only on ignore rules.
+
+## 3. Verify the source
+
+```bash
+npm install
+npm run lint
+node_modules/.bin/tsc --noEmit
+node --test $(rg --files | rg '(test|spec)\.mjs$')
+npm run build
 ```
 
 Expected:
 
-- `git status` is clean, or only contains changes you intentionally plan to release.
-- GitHub is authenticated as an account that can push and create releases.
-- npm is authenticated as an account that can publish `@agegr/pi-web`.
+- ESLint completes without errors.
+- TypeScript completes without errors.
+- All Node test files pass.
+- The production build completes successfully.
 
-## 2. Publish to npm
+Record any known build warnings in the release notes.
+
+## 4. Commit the release
 
 ```bash
-npm run release
+git add -A
+git diff --cached --check
+git diff --cached --stat
+git commit -m "Release Pi Web Secure <version>"
 ```
 
-The release script runs:
+Use a fork-specific version, for example `0.7.16-secure.1`, so it cannot be confused with an upstream tag.
+
+## 5. Tag and push
 
 ```bash
-npm version patch --no-git-tag-version && npm run build && npm publish --access public
-```
-
-Notes:
-
-- This bumps `package.json` and `package-lock.json`.
-- It intentionally runs a production build. Do not run `next build` during normal development; release work is the exception.
-- If `npm view @agegr/pi-web version` briefly shows the previous version, check the exact version instead:
-
-```bash
-npm view @agegr/pi-web@<version> version --registry https://registry.npmjs.org/
-npm view @agegr/pi-web versions --json --registry https://registry.npmjs.org/
-```
-
-## 3. Commit the Version Bump
-
-Replace `<version>` with the new package version, for example `0.7.5`.
-
-```bash
-git diff -- package.json package-lock.json
-git add package.json package-lock.json
-git commit -m "Release v<version>"
-```
-
-## 4. Tag and Push
-
-```bash
-git tag -a v<version> -m "v<version>"
+git tag -a v<version> -m "Pi Web Secure v<version>"
 git push origin main --tags
 ```
 
-Confirm the tag does not already exist before creating it when unsure:
+Verify that `origin` points to your fork before pushing.
 
-```bash
-git ls-remote --tags origin v<version>
-gh release view v<version> --repo agegr/pi-web
-```
-
-## 5. Generate Release Notes from Commits
-
-Use the previous release tag as the base.
-
-```bash
-git log --oneline --decorate v<previous>..v<version>
-git log --format='%h%x09%s%n%b' v<previous>..v<version>
-git diff --stat v<previous>..v<version>
-```
-
-Write the release notes from those commits, not from memory. Include both Chinese and English sections. Keep commit hashes next to each item when useful.
-
-Suggested structure:
-
-```markdown
-## 中文
-
-基于 `v<previous>..v<version>` 的提交整理。
-
-### 新增
-
-- ...
-
-### 修复
-
-- ...
-
-### 改进
-
-- ...
-
-### 内部调整
-
-- 发布 npm 包 `@agegr/pi-web@<version>`。
-
-## English
-
-Prepared from commits in `v<previous>..v<version>`.
-
-### Added
-
-- ...
-
-### Fixed
-
-- ...
-
-### Improved
-
-- ...
-
-### Internal
-
-- Published npm package `@agegr/pi-web@<version>`.
-```
-
-## 6. Create or Update the GitHub Release
-
-Create a new release:
+## 6. Create the GitHub release
 
 ```bash
 gh release create v<version> \
-  --repo agegr/pi-web \
+  --repo zhuguadundan/pi-web-secure \
   --verify-tag \
-  --title "v<version>" \
-  --notes-file release-notes.md
+  --title "Pi Web Secure v<version>" \
+  --generate-notes
 ```
 
-If the release already exists and only the notes need updating:
+Release notes should include:
 
-```bash
-gh release edit v<version> \
-  --repo agegr/pi-web \
-  --notes-file release-notes.md
-```
+- The upstream Pi Web version used as the base.
+- Security and authentication changes.
+- PWA and mobile changes.
+- Chat file-upload changes.
+- Workspace and launcher changes.
+- Upgrade steps and known limitations.
 
-You can avoid a temporary file by passing notes through stdin:
+## 7. npm publishing is intentionally disabled
 
-```bash
-gh release edit v<version> --repo agegr/pi-web --notes-file - <<'EOF'
-## 中文
+This fork is currently marked `"private": true` and has no npm release script. GitHub source releases are the supported distribution method until the maintainer chooses a unique npm package name.
 
-...
+To publish an npm package later, first:
 
-## English
+1. Choose a package name that you own and that does not imply upstream ownership.
+2. Update `name`, `version`, `repository`, `homepage`, and `bugs` in `package.json`.
+3. Update `package-lock.json`.
+4. Review the `files` allowlist and packed artifact with `npm pack --dry-run`.
+5. Remove `"private": true` only after all metadata is correct.
+6. Add a fork-specific release script and test it against a non-production registry or dry run.
 
-...
-EOF
-```
-
-## 7. Final Verification
-
-```bash
-gh release view v<version> --repo agegr/pi-web
-npm view @agegr/pi-web@<version> version --registry https://registry.npmjs.org/
-git status --short --branch
-git log --oneline --decorate -3
-```
-
-Expected:
-
-- GitHub Release exists and is not a draft unless intentionally published as one.
-- npm exact version resolves.
-- `main` is aligned with `origin/main`.
-- `HEAD` points at the release commit and `v<version>` tag.
+Never reuse the upstream `@agegr/pi-web` publishing instructions for this fork.

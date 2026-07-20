@@ -108,6 +108,16 @@ function displayCwd(cwd: string, homeDir?: string): string {
   return (homeDir && cwd.startsWith(homeDir)) ? "~" + cwd.slice(homeDir.length) : cwd;
 }
 
+function getWorkspaceShortcuts(homeDir: string): Array<{ label: string; path: string }> {
+  if (!homeDir) return [];
+  return [
+    { label: "home", path: homeDir },
+    { label: "code", path: `${homeDir}/Code` },
+    { label: "work", path: `${homeDir}/Work` },
+    { label: "super", path: `${homeDir}/Super` },
+  ];
+}
+
 /**
  * Path label that ellipsizes on the LEFT, keeping the (most relevant) trailing
  * segments visible: "…orkspace/pi-web". Shows as much of the path as fits
@@ -729,7 +739,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     onNewSession?.(tempId, selectedCwd);
   }, [selectedCwd, onNewSession]);
 
-  const recentProjects = getRecentProjects(allSessions);
+  const workspaceShortcuts = getWorkspaceShortcuts(homeDir);
+  const workspacePaths = new Set(workspaceShortcuts.map((shortcut) => shortcut.path));
+  const recentProjects = getRecentProjects(allSessions).filter((project) => !workspacePaths.has(project));
   const showProjectFilter = recentProjects.length > 8;
   const visibleProjects = projectFilter.trim()
     ? recentProjects.filter((p) => p.toLowerCase().includes(projectFilter.trim().toLowerCase()))
@@ -737,6 +749,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
   // Sessions of every worktree in the selected project are shown together
   const selectedProject = projectRootFor(selectedCwd);
+  const selectedWorkspaceLabel = workspaceShortcuts.find(
+    (shortcut) => shortcut.path === (selectedProject ?? selectedCwd),
+  )?.label;
   const filteredSessions = selectedProject
     ? allSessions.filter((s) => (s.projectRoot ?? s.cwd) === selectedProject)
     : allSessions;
@@ -887,7 +902,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           >
             {selectedCwd ? (
               <PathLabel
-                text={displayCwd(selectedProject ?? selectedCwd, homeDir)}
+                text={selectedWorkspaceLabel ?? displayCwd(selectedProject ?? selectedCwd, homeDir)}
                 style={{
                   flex: 1,
                   fontFamily: "var(--font-mono)",
@@ -956,6 +971,44 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 </div>
               )}
               <div style={{ maxHeight: "min(50vh, 380px)", overflowY: "auto" }}>
+                {workspaceShortcuts.map((shortcut) => (
+                  <button
+                    key={shortcut.path}
+                    onClick={() => {
+                      setSelectedCwd(shortcut.path);
+                      setProjectFilter("");
+                      setCustomPathOpen(false);
+                      setCustomPathValue("");
+                      setCustomPathError(null);
+                      setDropdownOpen(false);
+                    }}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 7,
+                      width: "100%",
+                      padding: "8px 10px",
+                      background: "var(--bg)",
+                      border: "none",
+                      borderBottom: "1px solid var(--border)",
+                      color: shortcut.path === selectedProject ? "var(--text)" : "var(--text-muted)",
+                      cursor: "pointer",
+                      textAlign: "left",
+                      fontSize: 11,
+                      fontFamily: "var(--font-mono)",
+                    }}
+                    title={shortcut.path}
+                  >
+                    {shortcut.path === selectedProject ? (
+                      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                        <polyline points="1.5 5 4 7.5 8.5 2.5" />
+                      </svg>
+                    ) : (
+                      <span style={{ width: 10, flexShrink: 0 }} />
+                    )}
+                    <span>{shortcut.label}</span>
+                  </button>
+                ))}
                 {visibleProjects.map((project) => (
                   <button
                     key={project}

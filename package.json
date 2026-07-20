@@ -1,14 +1,15 @@
 {
-  "name": "@agegr/pi-web",
-  "version": "0.7.16",
-  "description": "Web UI for the pi coding agent",
-  "homepage": "https://github.com/agegr/pi-web#readme",
+  "name": "pi-web-secure",
+  "version": "0.7.16-secure.1",
+  "private": true,
+  "description": "Security-focused PWA and file-workflow fork of agegr/pi-web",
+  "homepage": "https://github.com/zhuguadundan/pi-web-secure#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/agegr/pi-web.git"
+    "url": "git+https://github.com/zhuguadundan/pi-web-secure.git"
   },
   "bugs": {
-    "url": "https://github.com/agegr/pi-web/issues"
+    "url": "https://github.com/zhuguadundan/pi-web-secure/issues"
   },
   "license": "MIT",
   "bin": {
@@ -25,11 +26,12 @@
     "package.json"
   ],
   "scripts": {
-    "dev": "next dev -p 30141",
+    "dev": "next dev -H 127.0.0.1 -p 30140",
+    "dev:lan": "next dev -H 0.0.0.0 -p 30140",
     "build": "next build --webpack",
-    "start": "next start -p 30141",
-    "lint": "eslint .",
-    "release": "npm version patch --no-git-tag-version && npm run build && npm publish --access public"
+    "start": "next start -H 127.0.0.1 -p 30140",
+    "start:lan": "next start -H 0.0.0.0 -p 30140",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.80.10",

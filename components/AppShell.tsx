@@ -22,7 +22,7 @@ import type { SessionStatsInfo } from "@/lib/pi-types";
 
 type SessionCopyField = "file" | "id";
 
-export function AppShell() {
+export function AppShell({ authEnabled }: { authEnabled: boolean }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { isDark, toggleTheme } = useTheme();
@@ -256,6 +256,18 @@ export function AppShell() {
     setExplorerRefreshKey((k) => k + 1);
   }, []);
 
+  const handleFilesUploaded = useCallback(() => {
+    setExplorerRefreshKey((k) => k + 1);
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    try {
+      await fetch("/api/web-auth/logout", { method: "POST" });
+    } finally {
+      window.location.replace("/login");
+    }
+  }, []);
+
   const handleSessionForked = useCallback((newSessionId: string) => {
     setRefreshKey((k) => k + 1);
     setSessionKey((k) => k + 1);
@@ -413,6 +425,25 @@ export function AppShell() {
             {label}
           </button>
         ))}
+        {authEnabled && (
+          <button
+            onClick={() => void handleLogout()}
+            title="Sign out"
+            aria-label="Sign out"
+            style={{
+              width: 32, height: 32, padding: 0, flexShrink: 0,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: "none", border: "none", borderRadius: 6,
+              color: "var(--text-muted)", cursor: "pointer",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; e.currentTarget.style.color = "var(--text)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "var(--text-muted)"; }}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M10 17l5-5-5-5" /><path d="M15 12H3" /><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+            </svg>
+          </button>
+        )}
       </div>
     </>
   );
@@ -490,7 +521,7 @@ export function AppShell() {
         }
       }
     `}</style>
-    <div style={{ display: "flex", height: "100dvh", overflow: "hidden", background: "var(--bg)" }}>
+    <div className="app-shell" style={{ display: "flex", height: "100dvh", overflow: "hidden", background: "var(--bg)" }}>
       {/* Mobile overlay backdrop */}
       <div
         className={`sidebar-overlay-backdrop${mobileSidebarReady ? "" : " sidebar-mobile-pending"}`}
@@ -991,6 +1022,7 @@ export function AppShell() {
               onSessionStatsPanelOpen={openSessionStatsPanel}
               onContextUsageChange={handleContextUsageChange}
               onOpenFile={handleOpenLinkedFile}
+              onFilesUploaded={handleFilesUploaded}
             />
           ) : showPlaceholder ? (
             activeCwd ? (

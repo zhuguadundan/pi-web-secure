@@ -1,5 +1,6 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Noto_Sans_Mono } from "next/font/google";
+import { ServiceWorkerRegistration } from "@/components/ServiceWorkerRegistration";
 import "katex/dist/katex.min.css";
 import "./globals.css";
 
@@ -12,6 +13,25 @@ const notoSansMono = Noto_Sans_Mono({
 export const metadata: Metadata = {
   title: "Pi Agent Web",
   description: "Pi Coding Agent Web Interface",
+  applicationName: "Pi Agent Web",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "Pi Web",
+  },
+  icons: {
+    apple: "/apple-touch-icon.png",
+  },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f5f5f5" },
+    { media: "(prefers-color-scheme: dark)", color: "#242424" },
+  ],
 };
 
 export default function RootLayout({
@@ -31,6 +51,7 @@ export default function RootLayout({
       </head>
       <body translate="no" className="notranslate" style={{ height: "100dvh", display: "flex", flexDirection: "column" }}>
         {children}
+        <ServiceWorkerRegistration />
       </body>
     </html>
   );
