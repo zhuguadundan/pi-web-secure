@@ -12,7 +12,7 @@ This repository keeps the upstream Pi Web experience and adds practical features
 
 ## What This Fork Changes
 
-The current enhancement work starts from upstream `agegr/pi-web` v0.7.16. The following items describe changes made in this fork relative to that upstream release.
+The current enhanced release is based on upstream `agegr/pi-web` v0.8.0 plus the post-release fixes through upstream commit `0d1d0d1`. The following items describe changes maintained by this fork on top of that upstream baseline.
 
 ### Security and private network deployment
 
@@ -52,6 +52,19 @@ The current enhancement work starts from upstream `agegr/pi-web` v0.7.16. The fo
 - Uses `30140` for this fork so it can run beside an upstream instance on `30141`.
 - Adds loopback-only `dev` and `start` scripts plus explicit `dev:lan` and `start:lan` scripts.
 - Keeps the packaged launcher options `--port`, `--hostname`, and `--no-open`.
+
+## Upstream v0.8.0 Updates Included
+
+This fork now includes the upstream v0.8.0 feature set and the latest fixes available at the time of the upgrade:
+
+- Pi SDK packages upgraded and pinned to `0.81.1`.
+- Git-aware Explorer status indicators and file diff viewer.
+- Automatic session naming, including the post-v0.8.0 `streamFn` compatibility fix.
+- `cwd` URL parameter support for opening a workspace directly.
+- `!` and `!!` shell command prefixes, stabilized execution, and retrievable bash output.
+- Headless custom TUI rendering support in the web transcript.
+- Standard `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` support for server-side requests.
+- Middle-click file-tab closing and clearer session title actions.
 
 ## Upstream Capabilities Retained
 

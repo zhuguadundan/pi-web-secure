@@ -12,7 +12,9 @@ try {
 const nextConfig: NextConfig = {
   outputFileTracingRoot: __dirname,
   serverExternalPackages: [
+    "undici",
     "@earendil-works/pi-coding-agent",
+    "@earendil-works/pi-agent-core",
     "@earendil-works/pi-ai",
     "@earendil-works/pi-tui",
   ],

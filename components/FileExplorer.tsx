@@ -1,10 +1,17 @@
 "use client";
 
-import { forwardRef, useState, useCallback, useEffect, useImperativeHandle, useRef } from "react";
+import { forwardRef, useState, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from "react";
 import { getFileIcon, FolderIcon } from "./FileIcons";
 import { UploadFeedback } from "./UploadFeedback";
 import { useFileUpload } from "@/hooks/useFileUpload";
-import { encodeFilePathForApi, getRelativeFilePath, joinFilePath } from "@/lib/file-paths";
+import {
+  encodeFilePathForApi,
+  getFileDirectory,
+  getRelativeFilePath,
+  joinFilePath,
+  normalizeFilePathSlashes,
+} from "@/lib/file-paths";
+import type { GitFileStatus, GitFileStatusKind, GitStatusResponse } from "@/lib/git-types";
 
 interface FileEntry {
   name: string;
@@ -59,6 +66,31 @@ async function fetchEntries(dirPath: string): Promise<FileNode[]> {
   }));
 }
 
+async function fetchGitStatus(cwd: string): Promise<GitStatusResponse> {
+  const params = new URLSearchParams({ cwd });
+  const res = await fetch(`/api/git/status?${params.toString()}`);
+  if (!res.ok) throw new Error(`Failed to load Git status (HTTP ${res.status})`);
+  return res.json() as Promise<GitStatusResponse>;
+}
+
+const GIT_STATUS_LABELS: Record<GitFileStatusKind, string> = {
+  modified: "Modified",
+  added: "Added",
+  deleted: "Deleted",
+  renamed: "Renamed",
+  untracked: "Untracked",
+  conflict: "Conflict",
+};
+
+const GIT_STATUS_COLORS: Record<GitFileStatusKind, string> = {
+  modified: "#d6a84b",
+  added: "#4ade80",
+  deleted: "#f87171",
+  renamed: "#60a5fa",
+  untracked: "#4ade80",
+  conflict: "#f87171",
+};
+
 function MentionIcon({ size = 11 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -78,6 +110,8 @@ function TreeNode({
   onToggleExpanded,
   refreshToken,
   highlightedPaths,
+  gitStatusByPath,
+  changedDirectoryPaths,
 }: {
   node: FileNode;
   depth: number;
@@ -88,9 +122,16 @@ function TreeNode({
   onToggleExpanded: (fullPath: string, open: boolean) => void;
   refreshToken: string;
   highlightedPaths: Set<string>;
+  gitStatusByPath: Map<string, GitFileStatus>;
+  changedDirectoryPaths: Set<string>;
 }) {
   const open = expandedPaths.has(node.fullPath);
   const highlighted = highlightedPaths.has(node.fullPath);
+  const normalizedPath = normalizeFilePathSlashes(node.fullPath);
+  const gitStatus = gitStatusByPath.get(normalizedPath);
+  const containsGitChanges = node.isDir && (
+    gitStatus !== undefined || changedDirectoryPaths.has(normalizedPath)
+  );
   const [children, setChildren] = useState<FileNode[]>(node.children ?? []);
   const [loaded, setLoaded] = useState(node.loaded ?? false);
   const [loading, setLoading] = useState(false);
@@ -181,6 +222,36 @@ function TreeNode({
             style={{ width: 6, height: 6, flexShrink: 0, borderRadius: "50%", background: "#3b82f6" }}
           />
         )}
+        {!hovered && !node.isDir && gitStatus && (
+          <span
+            title={GIT_STATUS_LABELS[gitStatus.status]}
+            aria-label={GIT_STATUS_LABELS[gitStatus.status]}
+            style={{
+              width: 14,
+              flexShrink: 0,
+              color: GIT_STATUS_COLORS[gitStatus.status],
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+              fontWeight: 600,
+              textAlign: "center",
+            }}
+          >
+            {gitStatus.code}
+          </span>
+        )}
+        {!hovered && containsGitChanges && (
+          <span
+            title="Contains changed files"
+            aria-label="Contains changed files"
+            style={{
+              width: 6,
+              height: 6,
+              flexShrink: 0,
+              borderRadius: "50%",
+              background: "#d6a84b",
+            }}
+          />
+        )}
         {loading && (
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" strokeWidth="2" strokeLinecap="round">
             <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4" />
@@ -268,6 +339,8 @@ function TreeNode({
               onToggleExpanded={onToggleExpanded}
               refreshToken={refreshToken}
               highlightedPaths={highlightedPaths}
+              gitStatusByPath={gitStatusByPath}
+              changedDirectoryPaths={changedDirectoryPaths}
             />
           ))}
           {children.length === 0 && loaded && (
@@ -295,6 +368,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [treeRefreshKey, setTreeRefreshKey] = useState(0);
   const [highlightedPaths, setHighlightedPaths] = useState<Set<string>>(new Set());
+  const [gitFiles, setGitFiles] = useState<GitFileStatus[]>([]);
   const prevCwdRef = useRef<string | null>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const refreshToken = `${refreshKey ?? 0}:${treeRefreshKey}`;
@@ -304,6 +378,26 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   }, [cwd]);
   const upload = useFileUpload({ targetDirectory: cwd, onUploaded: handleUploaded });
   const { prepareUpload } = upload;
+
+  const gitStatusByPath = useMemo(() => new Map(
+    gitFiles.map((status) => [normalizeFilePathSlashes(status.filePath), status]),
+  ), [gitFiles]);
+
+  const changedDirectoryPaths = useMemo(() => {
+    const directories = new Set<string>();
+    const normalizedCwd = normalizeFilePathSlashes(cwd).replace(/\/$/, "");
+    for (const status of gitFiles) {
+      let directory = getFileDirectory(normalizeFilePathSlashes(status.filePath));
+      while (directory === normalizedCwd || directory.startsWith(`${normalizedCwd}/`)) {
+        directories.add(directory);
+        if (directory === normalizedCwd) break;
+        const parent = getFileDirectory(directory);
+        if (parent === directory) break;
+        directory = parent;
+      }
+    }
+    return directories;
+  }, [cwd, gitFiles]);
 
   const handleToggleExpanded = useCallback((fullPath: string, open: boolean) => {
     setExpandedPaths((prev) => {
@@ -351,6 +445,18 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
     return () => { cancelled = true; };
   }, [cwd, refreshKey, treeRefreshKey]);
 
+  useEffect(() => {
+    let cancelled = false;
+    fetchGitStatus(cwd)
+      .then((status) => {
+        if (!cancelled) setGitFiles(status.isGitRepository ? status.files : []);
+      })
+      .catch(() => {
+        if (!cancelled) setGitFiles([]);
+      });
+    return () => { cancelled = true; };
+  }, [cwd, refreshKey, treeRefreshKey]);
+
   const addUploadedFilesToChat = useCallback((fileNames: string[]) => {
     onAtMentions?.(
       fileNames.map((name) => getRelativeFilePath(joinFilePath(cwd, name), cwd)),
@@ -393,6 +499,8 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
               onToggleExpanded={handleToggleExpanded}
               refreshToken={refreshToken}
               highlightedPaths={highlightedPaths}
+              gitStatusByPath={gitStatusByPath}
+              changedDirectoryPaths={changedDirectoryPaths}
             />
           ))
         )}

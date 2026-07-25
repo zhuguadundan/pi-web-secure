@@ -75,7 +75,7 @@ git diff --cached --stat
 git commit -m "Release Pi Web Secure <version>"
 ```
 
-Use a fork-specific version, for example `0.7.16-secure.1`, so it cannot be confused with an upstream tag.
+Use a fork-specific version, for example `0.8.0-secure.1`, so it cannot be confused with an upstream tag.
 
 ## 5. Tag and push
 
