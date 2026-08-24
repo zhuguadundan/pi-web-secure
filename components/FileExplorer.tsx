@@ -30,7 +30,7 @@ interface FileNode {
 }
 
 interface Props {
-  cwd: string;
+  cwds: string[]; // Support multiple root directories
   onOpenFile: (filePath: string, fileName: string) => void;
   refreshKey?: number;
   onAtMention?: (relativePath: string, isDir: boolean) => void;
@@ -355,49 +355,60 @@ function TreeNode({
 }
 
 export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileExplorer({
-  cwd,
+  cwds,
   onOpenFile,
   refreshKey,
   onAtMention,
   onAtMentions,
   onUploadBusyChange,
 }, ref) {
-  const [roots, setRoots] = useState<FileNode[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Use the first cwd as the primary one for uploads
+  const primaryCwd = cwds[0] ?? "/";
+  const [rootsByCwd, setRootsByCwd] = useState<Map<string, FileNode[]>>(new Map());
+  const [loadingCwds, setLoadingCwds] = useState<Set<string>>(new Set());
+  const [errorsByCwd, setErrorsByCwd] = useState<Map<string, string>>(new Map());
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [treeRefreshKey, setTreeRefreshKey] = useState(0);
   const [highlightedPaths, setHighlightedPaths] = useState<Set<string>>(new Set());
-  const [gitFiles, setGitFiles] = useState<GitFileStatus[]>([]);
-  const prevCwdRef = useRef<string | null>(null);
+  const [gitFilesByCwd, setGitFilesByCwd] = useState<Map<string, GitFileStatus[]>>(new Map());
+  const prevCwdsRef = useRef<string[]>([]);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const refreshToken = `${refreshKey ?? 0}:${treeRefreshKey}`;
   const handleUploaded = useCallback((uploaded: string[]) => {
-    setHighlightedPaths(new Set(uploaded.map((name) => joinFilePath(cwd, name))));
+    setHighlightedPaths(new Set(uploaded.map((name) => joinFilePath(primaryCwd, name))));
     setTreeRefreshKey((key) => key + 1);
-  }, [cwd]);
-  const upload = useFileUpload({ targetDirectory: cwd, onUploaded: handleUploaded });
+  }, [primaryCwd]);
+  const upload = useFileUpload({ targetDirectory: primaryCwd, onUploaded: handleUploaded });
   const { prepareUpload } = upload;
 
-  const gitStatusByPath = useMemo(() => new Map(
-    gitFiles.map((status) => [normalizeFilePathSlashes(status.filePath), status]),
-  ), [gitFiles]);
-
-  const changedDirectoryPaths = useMemo(() => {
-    const directories = new Set<string>();
-    const normalizedCwd = normalizeFilePathSlashes(cwd).replace(/\/$/, "");
-    for (const status of gitFiles) {
-      let directory = getFileDirectory(normalizeFilePathSlashes(status.filePath));
-      while (directory === normalizedCwd || directory.startsWith(`${normalizedCwd}/`)) {
-        directories.add(directory);
-        if (directory === normalizedCwd) break;
-        const parent = getFileDirectory(directory);
-        if (parent === directory) break;
-        directory = parent;
-      }
+  // Compute git status maps for each cwd
+  const gitStatusByPathByCwd = useMemo(() => {
+    const result = new Map<string, Map<string, GitFileStatus>>();
+    for (const [cwd, files] of gitFilesByCwd.entries()) {
+      result.set(cwd, new Map(files.map((status) => [normalizeFilePathSlashes(status.filePath), status])));
     }
-    return directories;
-  }, [cwd, gitFiles]);
+    return result;
+  }, [gitFilesByCwd]);
+
+  const changedDirectoryPathsByCwd = useMemo(() => {
+    const result = new Map<string, Set<string>>();
+    for (const [cwd, files] of gitFilesByCwd.entries()) {
+      const directories = new Set<string>();
+      const normalizedCwd = normalizeFilePathSlashes(cwd).replace(/\/$/, "");
+      for (const status of files) {
+        let directory = getFileDirectory(normalizeFilePathSlashes(status.filePath));
+        while (directory === normalizedCwd || directory.startsWith(`${normalizedCwd}/`)) {
+          directories.add(directory);
+          if (directory === normalizedCwd) break;
+          const parent = getFileDirectory(directory);
+          if (parent === directory) break;
+          directory = parent;
+        }
+      }
+      result.set(cwd, directories);
+    }
+    return result;
+  }, [gitFilesByCwd]);
 
   const handleToggleExpanded = useCallback((fullPath: string, open: boolean) => {
     setExpandedPaths((prev) => {
@@ -425,43 +436,87 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
 
   useEffect(() => () => onUploadBusyChange?.(false), [onUploadBusyChange]);
 
+  // Load files for all cwds
   useEffect(() => {
-    const cwdChanged = prevCwdRef.current !== cwd;
-    prevCwdRef.current = cwd;
+    const cwdsChanged = JSON.stringify(prevCwdsRef.current) !== JSON.stringify(cwds);
+    prevCwdsRef.current = cwds;
 
-    // Reset expanded state only when cwd changes, not on refreshKey bumps
-    if (cwdChanged) {
+    // Reset expanded state only when cwds change, not on refreshKey bumps
+    if (cwdsChanged) {
       setExpandedPaths(new Set());
       setHighlightedPaths(new Set());
     }
 
-    setLoading(cwdChanged);
-    setError(null);
-    let cancelled = false;
-    fetchEntries(cwd)
-      .then((entries) => { if (!cancelled) setRoots(entries); })
-      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [cwd, refreshKey, treeRefreshKey]);
+    const controllers = new Map<string, AbortController>();
 
-  useEffect(() => {
-    let cancelled = false;
-    fetchGitStatus(cwd)
-      .then((status) => {
-        if (!cancelled) setGitFiles(status.isGitRepository ? status.files : []);
-      })
-      .catch(() => {
-        if (!cancelled) setGitFiles([]);
+    for (const cwd of cwds) {
+      const controller = new AbortController();
+      controllers.set(cwd, controller);
+
+      setLoadingCwds((prev) => new Set(prev).add(cwd));
+      setErrorsByCwd((prev) => {
+        const next = new Map(prev);
+        next.delete(cwd);
+        return next;
       });
-    return () => { cancelled = true; };
-  }, [cwd, refreshKey, treeRefreshKey]);
+
+      fetchEntries(cwd)
+        .then((entries) => {
+          if (controller.signal.aborted) return;
+          setRootsByCwd((prev) => new Map(prev).set(cwd, entries));
+        })
+        .catch((e) => {
+          if (controller.signal.aborted) return;
+          setErrorsByCwd((prev) => new Map(prev).set(cwd, e instanceof Error ? e.message : String(e)));
+        })
+        .finally(() => {
+          if (controller.signal.aborted) return;
+          setLoadingCwds((prev) => {
+            const next = new Set(prev);
+            next.delete(cwd);
+            return next;
+          });
+        });
+    }
+
+    return () => {
+      for (const controller of controllers.values()) {
+        controller.abort();
+      }
+    };
+  }, [cwds, refreshKey, treeRefreshKey]);
+
+  // Load git status for all cwds
+  useEffect(() => {
+    const controllers = new Map<string, AbortController>();
+
+    for (const cwd of cwds) {
+      const controller = new AbortController();
+      controllers.set(cwd, controller);
+
+      fetchGitStatus(cwd)
+        .then((status) => {
+          if (controller.signal.aborted) return;
+          setGitFilesByCwd((prev) => new Map(prev).set(cwd, status.isGitRepository ? status.files : []));
+        })
+        .catch(() => {
+          if (controller.signal.aborted) return;
+          setGitFilesByCwd((prev) => new Map(prev).set(cwd, []));
+        });
+    }
+
+    return () => {
+      for (const controller of controllers.values()) {
+        controller.abort();
+      }
+    };
+  }, [cwds, refreshKey, treeRefreshKey]);
 
   const addUploadedFilesToChat = useCallback((fileNames: string[]) => {
     onAtMentions?.(
-      fileNames.map((name) => getRelativeFilePath(joinFilePath(cwd, name), cwd)),
+      fileNames.map((name) => getRelativeFilePath(joinFilePath(primaryCwd, name), primaryCwd)),
     );
-  }, [cwd, onAtMentions]);
+  }, [primaryCwd, onAtMentions]);
 
   return (
     <div style={{ minHeight: "100%" }}>
@@ -482,33 +537,62 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
       />
 
       <div style={{ padding: "2px 4px" }}>
-        {loading ? (
-          <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>Loading files...</div>
-        ) : error ? (
-          <div style={{ padding: "8px 12px", fontSize: 11, color: "#f87171" }}>{error}</div>
-        ) : (
-          roots.map((node) => (
-            <TreeNode
-              key={node.fullPath}
-              node={node}
-              depth={0}
-              cwd={cwd}
-              onOpenFile={onOpenFile}
-              onAtMention={onAtMention}
-              expandedPaths={expandedPaths}
-              onToggleExpanded={handleToggleExpanded}
-              refreshToken={refreshToken}
-              highlightedPaths={highlightedPaths}
-              gitStatusByPath={gitStatusByPath}
-              changedDirectoryPaths={changedDirectoryPaths}
-            />
-          ))
-        )}
-        {!loading && !error && roots.length === 0 && (
-          <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>
-            No files found
-          </div>
-        )}
+        {cwds.map((cwd) => {
+          const roots = rootsByCwd.get(cwd) ?? [];
+          const loading = loadingCwds.has(cwd);
+          const error = errorsByCwd.get(cwd);
+          const gitStatusByPath = gitStatusByPathByCwd.get(cwd) ?? new Map();
+          const changedDirectoryPaths = changedDirectoryPathsByCwd.get(cwd) ?? new Set();
+          const cwdLabel = cwd.split('/').pop() || cwd;
+
+          return (
+            <div key={cwd} style={{ marginBottom: 8 }}>
+              <div
+                style={{
+                  padding: "4px 8px",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: "var(--text-muted)",
+                  background: "var(--bg-hover)",
+                  borderRadius: 4,
+                  marginBottom: 4,
+                  fontFamily: "var(--font-mono)",
+                }}
+              >
+                {cwdLabel}
+              </div>
+              {loading ? (
+                <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>Loading files...</div>
+              ) : error ? (
+                <div style={{ padding: "8px 12px", fontSize: 11, color: "#f87171" }}>{error}</div>
+              ) : (
+                <>
+                  {roots.map((node) => (
+                    <TreeNode
+                      key={node.fullPath}
+                      node={node}
+                      depth={0}
+                      cwd={cwd}
+                      onOpenFile={onOpenFile}
+                      onAtMention={onAtMention}
+                      expandedPaths={expandedPaths}
+                      onToggleExpanded={handleToggleExpanded}
+                      refreshToken={refreshToken}
+                      highlightedPaths={highlightedPaths}
+                      gitStatusByPath={gitStatusByPath}
+                      changedDirectoryPaths={changedDirectoryPaths}
+                    />
+                  ))}
+                  {roots.length === 0 && (
+                    <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>
+                      No files found
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

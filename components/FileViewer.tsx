@@ -589,6 +589,8 @@ function DocumentViewer({ filePath, cwd, sourceSessionId }: Props) {
 
   const ext = getFileExt(filePath);
   const isPdf = ext === "pdf";
+  const isDocx = ext === "docx";
+  const hasInlinePreview = isPdf || isDocx;
   const previewUrl = isPdf
     ? getFileApiUrl(filePath, "read", sourceSessionId, bust ? { v: bust } : undefined)
     : getFileApiUrl(filePath, "preview", sourceSessionId, bust ? { v: bust } : undefined);
@@ -610,7 +612,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId }: Props) {
         if (d.error) setError(d.error);
         if (typeof d.size === "number") {
           setSize(d.size);
-          if (!isPdf && d.size > DOCX_PREVIEW_MAX_BYTES) {
+          if (isDocx && d.size > DOCX_PREVIEW_MAX_BYTES) {
             setError("DOCX too large for preview (>10MB)");
           }
         }
@@ -626,7 +628,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId }: Props) {
         const d = JSON.parse((e as MessageEvent).data) as { size?: number };
         if (typeof d.size === "number") {
           setSize(d.size);
-          if (!isPdf && d.size > DOCX_PREVIEW_MAX_BYTES) {
+          if (isDocx && d.size > DOCX_PREVIEW_MAX_BYTES) {
             setError("DOCX too large for preview (>10MB)");
             return;
           }
@@ -642,7 +644,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId }: Props) {
       es.close();
       esRef.current = null;
     };
-  }, [filePath, isPdf, sourceSessionId]);
+  }, [filePath, isDocx, sourceSessionId]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -662,7 +664,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId }: Props) {
         <span style={{ fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={filePath}>
           {getRelativeFilePath(filePath, cwd)}
         </span>
-        <span style={{ marginLeft: "auto" }}>{ext === "docx" ? "docx preview" : "pdf"}</span>
+        <span style={{ marginLeft: "auto" }}>{isDocx ? "docx preview" : ext}</span>
         {size != null && <span>{formatSize(size)}</span>}
         <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
         <span
@@ -687,7 +689,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId }: Props) {
           <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, color: "#f87171", fontSize: 13, textAlign: "center" }}>
             {error}
           </div>
-        ) : (
+        ) : hasInlinePreview ? (
           <iframe
             key={previewUrl}
             src={previewUrl}
@@ -695,6 +697,11 @@ function DocumentViewer({ filePath, cwd, sourceSessionId }: Props) {
             title={`Preview ${getFileName(filePath)}`}
             style={{ width: "100%", height: "100%", border: "none", background: isPdf ? "var(--bg)" : "#eef1f5" }}
           />
+        ) : (
+          <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: 13 }}>
+            <span>{ext.toUpperCase()}</span>
+            <DownloadLink filePath={filePath} sourceSessionId={sourceSessionId} />
+          </div>
         )}
       </div>
     </div>

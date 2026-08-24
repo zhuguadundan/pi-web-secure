@@ -2,7 +2,7 @@ export const TEXT_PREVIEW_MAX_BYTES = 256 * 1024;
 export const IMAGE_PREVIEW_MAX_BYTES = 10 * 1024 * 1024;
 export const DOCX_PREVIEW_MAX_BYTES = 10 * 1024 * 1024;
 
-export type DocumentPreviewKind = "pdf" | "docx";
+export type DocumentPreviewKind = "pdf" | "docx" | "pptx";
 
 export const IMAGE_EXT_TO_MIME: Record<string, string> = {
   png: "image/png",
@@ -32,6 +32,7 @@ export const AUDIO_EXT_TO_MIME: Record<string, string> = {
 export const DOCUMENT_EXT_TO_MIME: Record<DocumentPreviewKind, string> = {
   pdf: "application/pdf",
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 };
 
 function getBaseName(filePath: string): string {
@@ -56,7 +57,7 @@ export function getDocumentMime(filePath: string): string | null {
 
 export function documentPreviewKind(filePath: string): DocumentPreviewKind | null {
   const ext = getFileExt(filePath);
-  if (ext === "pdf" || ext === "docx") return ext;
+  if (ext === "pdf" || ext === "docx" || ext === "pptx") return ext;
   return null;
 }
 

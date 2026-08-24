@@ -19,6 +19,11 @@ const nextConfig: NextConfig = {
     "@earendil-works/pi-tui",
   ],
   allowedDevOrigins: ['192.168.*.*'],
+  experimental: {
+    // Next.js default 10MB truncates multipart uploads, which surfaces as
+    // "Failed to parse body as FormData". 200MB covers large media files.
+    proxyClientMaxBodySize: 200 * 1024 * 1024,
+  },
   async headers() {
     return [
       {

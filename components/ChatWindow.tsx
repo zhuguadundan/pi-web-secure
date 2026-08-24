@@ -21,7 +21,7 @@ import {
   getNextVisibleCount,
   getVisibleRenderWindow,
   restoreScrollTop,
-  VISIBLE_PAGE_SIZE,
+  getInitialPageSize,
 } from "@/lib/chat-lazy-load";
 
 interface Props {
@@ -200,7 +200,8 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   // --- Lazy-load historical messages ---
   // Only render the last N messages initially. When the user scrolls to the
   // top, load another page while keeping the scroll position stable.
-  const [visibleCount, setVisibleCount] = useState(VISIBLE_PAGE_SIZE);
+  // Desktop users get more initial messages for faster perceived load.
+  const [visibleCount, setVisibleCount] = useState(() => getInitialPageSize(isMobile));
   const sentinelRef = useRef<HTMLDivElement>(null);
   const prevScrollDistanceRef = useRef<number | null>(null);
 

@@ -48,6 +48,8 @@ interface WorktreeState {
 }
 
 const UNREAD_SESSIONS_STORAGE_KEY = "pi-web:unread-session-ids";
+const SESSIONS_CACHE_KEY = "pi-web:sessions-cache";
+const SESSIONS_CACHE_MAX_AGE = 5000; // 5 seconds
 
 function loadUnreadSessionIds(): Set<string> {
   if (typeof window === "undefined") return new Set();
@@ -67,6 +69,43 @@ function saveUnreadSessionIds(ids: Set<string>): void {
   try {
     if (ids.size === 0) window.localStorage.removeItem(UNREAD_SESSIONS_STORAGE_KEY);
     else window.localStorage.setItem(UNREAD_SESSIONS_STORAGE_KEY, JSON.stringify([...ids]));
+  } catch {
+    // ignore storage quota / privacy-mode errors
+  }
+}
+
+interface SessionsCache {
+  sessions: SessionInfo[];
+  runningSessionIds: string[];
+  timestamp: number;
+}
+
+function loadSessionsCache(): SessionsCache | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(SESSIONS_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as SessionsCache;
+    // Check if cache is still fresh
+    if (Date.now() - parsed.timestamp > SESSIONS_CACHE_MAX_AGE) {
+      window.localStorage.removeItem(SESSIONS_CACHE_KEY);
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveSessionsCache(sessions: SessionInfo[], runningSessionIds: string[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    const cache: SessionsCache = {
+      sessions,
+      runningSessionIds,
+      timestamp: Date.now(),
+    };
+    window.localStorage.setItem(SESSIONS_CACHE_KEY, JSON.stringify(cache));
   } catch {
     // ignore storage quota / privacy-mode errors
   }
@@ -373,11 +412,30 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
   const loadSessions = useCallback(async (showLoading = false) => {
     try {
-      if (showLoading) setLoading(true);
+      // Try to load from cache first for instant display
+      if (showLoading) {
+        const cached = loadSessionsCache();
+        if (cached) {
+          setAllSessions(cached.sessions);
+          if (!sseAuthoritativeRef.current) {
+            setRunningSessionIds(new Set(cached.runningSessionIds));
+          }
+          setLoading(false);
+          // Continue to fetch fresh data in background
+          showLoading = false;
+        } else {
+          setLoading(true);
+        }
+      }
+
       const res = await fetch("/api/sessions");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { sessions: SessionInfo[]; runningSessionIds?: string[] };
       setAllSessions(data.sessions);
+
+      // Cache the fresh data
+      saveSessionsCache(data.sessions, data.runningSessionIds ?? []);
+
       // Treat the fetched running set as an initial fallback only. Once SSE is
       // live it owns this state, so a slow fetch can't revive a stale snapshot.
       if (!sseAuthoritativeRef.current) {
@@ -1655,7 +1713,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
               <FileExplorer
                 ref={fileExplorerRef}
-                cwd={selectedCwd ?? selectedCwdProp!}
+                cwds={workspaceShortcuts.map((ws) => ws.path).filter((p) => p)}
                 onOpenFile={onOpenFile ?? (() => {})}
                 refreshKey={explorerKey}
                 onAtMention={onAtMention}
