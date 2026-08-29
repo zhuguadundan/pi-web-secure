@@ -11,6 +11,11 @@ import type {
 } from "@/lib/types";
 import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
+import {
+  INITIAL_STREAMING_STATE,
+  streamReducer,
+  type ClientAssistantMessageEvent,
+} from "@/lib/streaming-message";
 import { getToolNamesForPreset, type ToolEntry } from "@/lib/tool-presets";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 
@@ -25,31 +30,6 @@ export interface SessionData {
     thinkingLevel: string;
     model: { provider: string; modelId: string } | null;
   };
-}
-
-interface StreamingState {
-  isStreaming: boolean;
-  streamingMessage: Partial<AgentMessage> | null;
-}
-
-type StreamAction =
-  | { type: "start" }
-  | { type: "update"; message: Partial<AgentMessage> }
-  | { type: "end" }
-  | { type: "reset" };
-
-function streamReducer(state: StreamingState, action: StreamAction): StreamingState {
-  switch (action.type) {
-    case "start":
-      return { isStreaming: true, streamingMessage: null };
-    case "update":
-      return { isStreaming: true, streamingMessage: action.message };
-    case "end":
-    case "reset":
-      return { isStreaming: false, streamingMessage: null };
-    default:
-      return state;
-  }
 }
 
 interface AgentEvent {
@@ -140,6 +120,7 @@ export type BuiltinSlashCommandResult =
 
 export interface UseAgentSessionOptions {
   session: SessionInfo | null;
+  sessionRunning?: boolean;
   newSessionCwd: string | null;
   onAgentEnd?: () => void;
   onSessionCreated?: (session: SessionInfo) => void;
@@ -322,7 +303,7 @@ type SlashCommandsResponse = {
 
 export function useAgentSession(opts: UseAgentSessionOptions) {
   const {
-    session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked,
+    session, sessionRunning, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked,
     modelsRefreshKey, onBranchDataChange, onSystemPromptChange, onSessionStatsPanelOpen,
   } = opts;
 
@@ -334,7 +315,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [activeLeafId, setActiveLeafId] = useState<string | null>(null);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [entryIds, setEntryIds] = useState<string[]>([]);
-  const [streamState, dispatch] = useReducer(streamReducer, { isStreaming: false, streamingMessage: null });
+  const [streamState, dispatch] = useReducer(streamReducer, INITIAL_STREAMING_STATE);
   const [agentRunning, setAgentRunning] = useState(false);
   const [bashRunning, setBashRunning] = useState(false);
   const [pendingBash, setPendingBash] = useState<{ command: string; excludeFromContext: boolean } | null>(null);
@@ -367,6 +348,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessages>({ steering: [], followUp: [] });
 
   const eventSourceRef = useRef<EventSource | null>(null);
+  const eventSourceSessionIdRef = useRef<string | null>(null);
+  const eventConnectionPromiseRef = useRef<Promise<EventStreamConnectionResult> | null>(null);
+  const eventReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const connectedSessionIdsRef = useRef(new Set<string>());
   const sessionIdRef = useRef<string | null>(session?.id ?? null);
   const agentRunningRef = useRef(false);
   const bashRunningRef = useRef(false);
@@ -592,14 +577,23 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [ensureNewSession]);
 
   const connectEvents = useCallback((sid: string): Promise<EventStreamConnectionResult> => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
+    const current = eventSourceRef.current;
+    if (current && eventSourceSessionIdRef.current === sid) {
+      if (current.readyState === EventSource.OPEN) {
+        return Promise.resolve({ status: "connected", source: current });
+      }
+      if (eventConnectionPromiseRef.current) return eventConnectionPromiseRef.current;
+    }
+    current?.close();
+    if (eventReconnectTimerRef.current) {
+      clearTimeout(eventReconnectTimerRef.current);
+      eventReconnectTimerRef.current = null;
     }
     const es = new EventSource(`/api/agent/${encodeURIComponent(sid)}/events`);
     eventSourceRef.current = es;
+    eventSourceSessionIdRef.current = sid;
 
-    return new Promise((resolve) => {
+    const connection = new Promise<EventStreamConnectionResult>((resolve) => {
       let settled = false;
       const settle = (status: EventStreamConnectionStatus) => {
         if (settled) return;
@@ -610,10 +604,21 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       const timeout = setTimeout(() => settle("timeout"), EVENT_STREAM_CONNECT_TIMEOUT_MS);
 
       es.onmessage = (e) => {
+        if (eventSourceRef.current !== es || sessionIdRef.current !== sid) return;
         try {
           const event = JSON.parse(e.data) as AgentEvent;
-          if (event.type === "connected") settle("connected");
-          handleAgentEventRef.current?.(event);
+          if (event.type === "connected") {
+            const reconnecting = connectedSessionIdsRef.current.has(sid);
+            connectedSessionIdsRef.current.add(sid);
+            if (eventReconnectTimerRef.current) {
+              clearTimeout(eventReconnectTimerRef.current);
+              eventReconnectTimerRef.current = null;
+            }
+            settle("connected");
+            handleAgentEventRef.current?.({ ...event, reconnecting });
+          } else {
+            handleAgentEventRef.current?.(event);
+          }
         } catch {
           // ignore
         }
@@ -626,8 +631,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           settle("closed");
           if (eventSourceRef.current === es && agentRunningRef.current) {
             eventSourceRef.current = null;
-            setTimeout(() => {
-              if (agentRunningRef.current) void connectEvents(sid);
+            eventSourceSessionIdRef.current = null;
+            eventConnectionPromiseRef.current = null;
+            if (eventReconnectTimerRef.current) clearTimeout(eventReconnectTimerRef.current);
+            eventReconnectTimerRef.current = setTimeout(() => {
+              eventReconnectTimerRef.current = null;
+              if (agentRunningRef.current && sessionIdRef.current === sid) void connectEvents(sid);
             }, 1000);
           }
         }
@@ -635,16 +644,28 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // The timeout above resolves only to let callers decide whether this
         // connection must be ready before they continue.
       };
+    }).finally(() => {
+      if (eventConnectionPromiseRef.current === connection) eventConnectionPromiseRef.current = null;
     });
+    eventConnectionPromiseRef.current = connection;
+    return connection;
   }, []);
 
   const ensureEventsConnected = useCallback(async (sid: string) => {
     const result = await connectEvents(sid);
     if (result.status === "connected" || result.source.readyState === EventSource.OPEN) return;
-    if (eventSourceRef.current === result.source) eventSourceRef.current = null;
+    if (eventSourceRef.current === result.source) {
+      eventSourceRef.current = null;
+      eventSourceSessionIdRef.current = null;
+    }
     result.source.close();
     throw new EventStreamConnectionError(result.status);
   }, [connectEvents]);
+
+  useEffect(() => {
+    if (!session?.id || !sessionRunning) return;
+    void connectEvents(session.id).catch(() => {});
+  }, [connectEvents, session?.id, sessionRunning]);
 
   const respondToExtensionUi = useCallback(async (
     request: ExtensionUiDialogRequest,
@@ -877,6 +898,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   const handleAgentEvent = useCallback((event: AgentEvent) => {
     switch (event.type) {
+      case "connected":
+        if (event.isRunning === true) {
+          agentRunningRef.current = true;
+          setAgentRunning(true);
+          setAgentPhase(event.isStreaming === true ? { kind: "waiting_model" } : { kind: "running_command" });
+          dispatch({ type: "start" });
+        } else if (event.reconnecting === true && agentRunningRef.current && sessionIdRef.current) {
+          void reconcileAgentState(sessionIdRef.current);
+        }
+        break;
       case "agent_start":
         agentRunningRef.current = true;
         setAgentRunning(true);
@@ -922,20 +953,22 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           message: (event.error as string | undefined) ?? "Extension command failed",
         });
         break;
-      case "message_start":
-      case "message_update": {
-        // Ignore streaming events arriving after this run already finished
-        // (e.g. SSE data buffered while the tab was frozen, flushed after
-        // reconcile) — they would resurrect a ghost streaming bubble.
+      case "message_start": {
         if (!agentRunningRef.current) break;
-        const msg = event.message as Partial<AgentMessage> | undefined;
-        if (msg?.role === "user") {
-          break;
+        const message = event.message as AgentMessage | undefined;
+        if (message?.role === "assistant") {
+          dispatch({ type: "snapshot", message });
+          if (message.content.length > 0) setAgentPhase(null);
         }
-        if (msg) {
-          dispatch({ type: "update", message: normalizeToolCalls(msg as AgentMessage) });
+        break;
+      }
+      case "message_update": {
+        if (!agentRunningRef.current) break;
+        const delta = event.assistantMessageEvent as ClientAssistantMessageEvent | undefined;
+        if (delta) {
+          dispatch({ type: "delta", event: delta });
+          if (delta.type !== "toolcall_start" && delta.type !== "toolcall_delta") setAgentPhase(null);
         }
-        setAgentPhase(null);
         break;
       }
       case "message_end": {
@@ -965,7 +998,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         } else if (completed) {
           setMessages((prev) => [...prev, normalizeToolCalls(completed)]);
         }
-        dispatch({ type: "reset" });
+        dispatch({ type: "end" });
         setAgentPhase({ kind: "waiting_model" });
         break;
       }
@@ -1022,7 +1055,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         handleExtensionUiRequest(event as ExtensionUiRequest);
         break;
     }
-  }, [addNotice, finishPromptWithoutStream, handleExtensionUiRequest, loadSession, onAgentEnd]);
+  }, [addNotice, finishPromptWithoutStream, handleExtensionUiRequest, loadSession, onAgentEnd, reconcileAgentState]);
   handleAgentEventRef.current = handleAgentEvent;
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
@@ -1487,6 +1520,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
 
   // Load session on mount
   useEffect(() => {
+    const connectedSessionIds = connectedSessionIdsRef.current;
     if (session) {
       sessionIdRef.current = session.id;
       loadSession(session.id, true, true).then((agentState) => {
@@ -1523,6 +1557,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       bashRecoveryIdRef.current += 1;
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
+      eventSourceSessionIdRef.current = null;
+      eventConnectionPromiseRef.current = null;
+      connectedSessionIds.clear();
+      if (eventReconnectTimerRef.current) {
+        clearTimeout(eventReconnectTimerRef.current);
+        eventReconnectTimerRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

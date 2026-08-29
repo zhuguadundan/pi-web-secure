@@ -4,7 +4,7 @@ function isObject(val: unknown): val is Record<string, unknown> {
   return typeof val === "object" && val !== null && !Array.isArray(val);
 }
 
-function normalizeToolCallBlock(block: unknown): ToolCallContent | null {
+function normalizeToolCallBlock(block: unknown, includeStreamingRawInput = false): ToolCallContent | null {
   if (!isObject(block) || block.type !== "toolCall") return null;
   return {
     type: "toolCall",
@@ -15,18 +15,22 @@ function normalizeToolCallBlock(block: unknown): ToolCallContent | null {
       : (typeof block.arguments === "object" && block.arguments !== null && !Array.isArray(block.arguments)
         ? block.arguments as Record<string, unknown>
         : {}),
+    ...(includeStreamingRawInput && typeof block.partialJson === "string" ? { rawInput: block.partialJson } : {}),
   };
 }
 
-export function normalizeToolCalls(msg: AgentMessage): AgentMessage {
-  // Non-assistant roles (user, toolResult, bashExecution, custom) are returned
-  // unchanged — only assistant messages go through tool-call field normalization.
+function normalizeAssistantToolCalls(msg: AgentMessage, includeStreamingRawInput = false): AgentMessage {
   if (msg.role !== "assistant") return msg;
   const content = (msg as AssistantMessage).content;
   if (!Array.isArray(content)) return msg;
-  const normalized = content.map((block) => {
-    const result = normalizeToolCallBlock(block);
-    return result ?? block;
-  });
+  const normalized = content.map((block) => normalizeToolCallBlock(block, includeStreamingRawInput) ?? block);
   return { ...msg, content: normalized } as AgentMessage;
+}
+
+export function normalizeToolCalls(msg: AgentMessage): AgentMessage {
+  return normalizeAssistantToolCalls(msg);
+}
+
+export function normalizeStreamingToolCalls(msg: AgentMessage): AgentMessage {
+  return normalizeAssistantToolCalls(msg, true);
 }

@@ -140,6 +140,14 @@ export class AgentSessionWrapper {
     return this._alive && (this.promptRunning || this.inner.isStreaming || this.inner.isCompacting || this.inner.isBashRunning);
   }
 
+  get isStreaming(): boolean {
+    return this._alive && this.inner.isStreaming;
+  }
+
+  get streamingMessage(): unknown {
+    return this._alive ? this.inner.agent.state?.streamingMessage : undefined;
+  }
+
   start(): void {
     this.unsubscribe = this.inner.subscribe((event: AgentEvent) => {
       this.resetIdleTimer();
@@ -147,12 +155,8 @@ export class AgentSessionWrapper {
         invalidateSessionListCache();
       }
       this.emit(event);
-      // Streaming / compaction / tool events flow through here; re-broadcast
-      // the running-status snapshot so the sidebar can update live.
-      notifyRunningChange();
     });
     this.resetIdleTimer();
-    notifyRunningChange();
   }
 
   setForceEmptySystemPrompt(force: boolean): void {
@@ -239,14 +243,6 @@ export class AgentSessionWrapper {
     return type === "prompt" || type === "steer" || type === "follow_up" || type === "get_commands";
   }
 
-  private async withFinalRunningNotification<T>(operation: () => Promise<T>): Promise<T> {
-    try {
-      return await operation();
-    } finally {
-      notifyRunningChange();
-    }
-  }
-
   private applyForcedEmptySystemPrompt(): void {
     if (this.forceEmptySystemPrompt && this.inner.agent.state) {
       this.inner.agent.state.systemPrompt = "";
@@ -315,7 +311,6 @@ export class AgentSessionWrapper {
         const promptImages = command.images as Array<{ type: "image"; data: string; mimeType: string }> | undefined;
         const streamingBehavior = command.streamingBehavior as "steer" | "followUp" | undefined;
         this.promptRunning = true;
-        notifyRunningChange();
         this.inner.prompt(command.message as string, {
           ...(promptImages?.length ? { images: promptImages } : {}),
           ...(streamingBehavior ? { streamingBehavior } : {}),
@@ -323,7 +318,6 @@ export class AgentSessionWrapper {
         }).then(() => {
           this.promptRunning = false;
           if (!streamingBehavior) this.emit({ type: "prompt_done" });
-          notifyRunningChange();
         }).catch((error) => {
           this.promptRunning = false;
           invalidateSessionListCache();
@@ -332,13 +326,12 @@ export class AgentSessionWrapper {
             errorMessage: error instanceof Error ? error.message : String(error),
           });
           if (!streamingBehavior) this.emit({ type: "prompt_done" });
-          notifyRunningChange();
         });
         return null;
       }
 
       case "abort":
-        await this.withFinalRunningNotification(() => this.inner.abort());
+        await this.inner.abort();
         return null;
 
       case "get_state": {
@@ -440,9 +433,7 @@ export class AgentSessionWrapper {
 
       case "compact": {
         try {
-          return await this.withFinalRunningNotification(() =>
-            this.inner.compact(command.customInstructions as string | undefined)
-          );
+          return await this.inner.compact(command.customInstructions as string | undefined);
         } finally {
           invalidateSessionListCache();
         }
@@ -578,14 +569,12 @@ export class AgentSessionWrapper {
           undefined,
           { excludeFromContext: command.excludeFromContext as boolean | undefined },
         );
-        notifyRunningChange();
         try {
           const result = await execution;
           this.persistBashOnlySession();
           return result;
         } finally {
           invalidateSessionListCache();
-          notifyRunningChange();
         }
       }
 
@@ -610,7 +599,6 @@ export class AgentSessionWrapper {
     this.pendingUiResponses.clear();
     this.pendingUiRequests.clear();
     this.onDestroyCallback?.();
-    notifyRunningChange();
   }
 
   private resolveExtensionUiResponse(response: ExtensionUiResponse): void {
@@ -953,7 +941,6 @@ export class AgentSessionWrapper {
 declare global {
   var __piSessions: Map<string, AgentSessionWrapper> | undefined;
   var __piStartLocks: Map<string, Promise<{ session: AgentSessionWrapper; realSessionId: string }>> | undefined;
-  var __piRunningListeners: Set<(ids: string[]) => void> | undefined;
 }
 
 function getRegistry(): Map<string, AgentSessionWrapper> {
@@ -982,43 +969,6 @@ export function getRunningRpcSessionIds(): string[] {
     if (session.isRunning()) ids.add(session.sessionId || sessionId);
   }
   return [...ids];
-}
-
-// ----------------------------------------------------------------------------
-// Running-status broadcaster
-//
-// Pushes the current set of running session ids to subscribers whenever any
-// session's running state may have changed. This lets the sidebar receive live
-// updates over SSE instead of polling. Listeners live on globalThis so they
-// survive Next.js hot-reload.
-// ----------------------------------------------------------------------------
-
-function getRunningListeners(): Set<(ids: string[]) => void> {
-  if (!globalThis.__piRunningListeners) globalThis.__piRunningListeners = new Set();
-  return globalThis.__piRunningListeners;
-}
-
-/** Subscribe to running-session-id changes. Returns an unsubscribe function. */
-export function subscribeRunningSessions(listener: (ids: string[]) => void): () => void {
-  const listeners = getRunningListeners();
-  listeners.add(listener);
-  return () => { listeners.delete(listener); };
-}
-
-let lastRunningSnapshot = "";
-
-/**
- * Recompute the running-session-id set and, if it changed since the last
- * notification, broadcast it to subscribers. Cheap to call often.
- */
-export function notifyRunningChange(): void {
-  const ids = getRunningRpcSessionIds();
-  const snapshot = JSON.stringify([...ids].sort());
-  if (snapshot === lastRunningSnapshot) return;
-  lastRunningSnapshot = snapshot;
-  for (const listener of getRunningListeners()) {
-    try { listener(ids); } catch { /* ignore listener errors */ }
-  }
 }
 
 /**

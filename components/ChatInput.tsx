@@ -2,6 +2,7 @@
 
 import React, { useRef, useState, useCallback, useEffect, useImperativeHandle, forwardRef, KeyboardEvent } from "react";
 import type { BuiltinSlashCommandResult, CompactResultInfo, QueuedMessages, SlashCommandInfo } from "@/hooks/useAgentSession";
+import type { TextContent, UserMessage } from "@/lib/types";
 import { clearDraft, getDraft, setDraft, type ChatDraftImage } from "@/lib/draft-store";
 import {
   buildEntriesFromFiles, buildAtInsertText, extractAtQuery, filterFileEntries,
@@ -63,6 +64,7 @@ interface Props {
 export interface ChatInputHandle {
   insertText: (text: string) => void;
   insertIfEmpty: (text: string) => void;
+  replaceMessage: (message: UserMessage) => void;
   prependText: (text: string) => void;
   addImages: (files: File[]) => void;
 }
@@ -147,6 +149,27 @@ function draftImageToAttachedImage(image: ChatDraftImage): AttachedImage {
     ...image,
     previewUrl: `data:${image.mimeType};base64,${image.data}`,
   };
+}
+
+function getUserMessageText(message: UserMessage): string {
+  if (typeof message.content === "string") return message.content;
+  return message.content
+    .filter((block): block is TextContent => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+}
+
+function getUserMessageDraftImages(message: UserMessage): ChatDraftImage[] {
+  if (typeof message.content === "string") return [];
+  return message.content.flatMap((block) => {
+    if (block.type !== "image") return [];
+    const flat = block as unknown as { data?: unknown; mimeType?: unknown };
+    const data = block.source?.type === "base64" ? block.source.data : flat.data;
+    const mimeType = block.source?.type === "base64" ? block.source.media_type : flat.mimeType;
+    return typeof data === "string" && typeof mimeType === "string"
+      ? [{ data, mimeType }]
+      : [];
+  });
 }
 
 function revokeImagePreview(image: AttachedImage): void {
@@ -248,6 +271,25 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       if (current.trim()) return;
       setValue(text);
       setAtQuery(null);
+      requestAnimationFrame(() => {
+        if (!ta) return;
+        ta.focus();
+        ta.style.height = "auto";
+        ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+      });
+    },
+    replaceMessage(message: UserMessage) {
+      const ta = textareaRef.current;
+      const current = ta ? ta.value : value;
+      if (current.trim() || attachedImagesRef.current.length > 0) return;
+      const text = getUserMessageText(message);
+      const images = getUserMessageDraftImages(message).map(draftImageToAttachedImage);
+      setValue(text);
+      setAtQuery(null);
+      setAttachedImages((previous) => {
+        previous.forEach(revokeImagePreview);
+        return images;
+      });
       requestAnimationFrame(() => {
         if (!ta) return;
         ta.focus();
