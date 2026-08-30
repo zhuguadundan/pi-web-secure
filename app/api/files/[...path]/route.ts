@@ -26,9 +26,9 @@ import {
 } from "@/lib/file-upload";
 
 const IGNORED_NAMES = new Set([
-  "node_modules", ".git", ".next", "dist", "build", "__pycache__",
+  "node_modules", ".git", ".next", "build", "__pycache__",
   ".turbo", ".cache", "coverage", ".pytest_cache", ".mypy_cache",
-  "target", "vendor", ".DS_Store", ".git",
+  "target", "vendor", ".DS_Store",
 ]);
 
 const IGNORED_SUFFIXES = [".pyc"];
@@ -386,6 +386,14 @@ ${bodyHtml}
 </html>`;
 }
 
+function looksBinary(buffer: Buffer): boolean {
+  const len = Math.min(buffer.length, 8192);
+  for (let i = 0; i < len; i++) {
+    if (buffer[i] === 0) return true;
+  }
+  return false;
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
@@ -437,9 +445,17 @@ export async function GET(
         return streamFile(filePath, stat, documentMime, request.headers.get("range"));
       }
       if (stat.size > TEXT_PREVIEW_MAX_BYTES) {
-        return NextResponse.json({ error: "File too large for preview (>256KB)" }, { status: 413 });
+        return NextResponse.json({ error: "File too large for text preview (>256KB) — use download." }, { status: 413 });
       }
-      const content = fs.readFileSync(filePath, "utf-8");
+      const buffer = fs.readFileSync(filePath);
+      if (looksBinary(buffer)) {
+        const mime = getDocumentMime(filePath) || "application/octet-stream";
+        return NextResponse.json(
+          { error: `Binary file (${mime}) cannot be previewed as text — use download.` },
+          { status: 415 },
+        );
+      }
+      const content = buffer.toString("utf-8");
       const language = getLanguage(filePath);
       return NextResponse.json({ content, language, size: stat.size });
     }
