@@ -299,6 +299,8 @@ export interface SessionInfo {
   projectRoot?: string;
   /** Branch name when cwd is a linked git worktree (not the main checkout) */
   worktreeBranch?: string;
+  /** True for unsaved runtime-only sessions that should be skipped by search. */
+  transient?: boolean;
 }
 
 export interface SessionContext {

@@ -1,3 +1,4 @@
+import { registerAgentEventStreamCloser } from "@/lib/agent-event-stream";
 import { isEventIncludedInSnapshot, toClientAgentEvent } from "@/lib/agent-event-wire";
 import { resolveSessionPath } from "@/lib/session-reader";
 import { getRpcSession, startRpcSession } from "@/lib/rpc-manager";
@@ -79,17 +80,23 @@ export async function GET(
       // Cleanup is idempotent because request abort and stream cancellation can
       // race when a browser tab closes or a proxy tears down the response.
       let cleanedUp = false;
-      const cleanup = () => {
+      const cleanup = (mode: "client" | "shutdown" = "client") => {
         if (cleanedUp) return;
         cleanedUp = true;
+        unregisterCloser();
         clearInterval(heartbeat);
         unsubscribe();
-        try { controller.close(); } catch { /* already closed */ }
+        if (mode === "shutdown") {
+          try { controller.error(new Error("pi-web server shutting down")); } catch { /* already closed */ }
+        } else {
+          try { controller.close(); } catch { /* already closed */ }
+        }
       };
-      cancelStream = cleanup;
+      const unregisterCloser = registerAgentEventStreamCloser(() => cleanup("shutdown"));
+      cancelStream = () => cleanup("client");
 
       // Detect client disconnect via abort signal
-      req.signal?.addEventListener("abort", cleanup, { once: true });
+      req.signal?.addEventListener("abort", () => cleanup("client"), { once: true });
     },
     cancel() {
       cancelStream?.();

@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
 import {
+  getAuthRetryAfterMs,
+  recordAuthFailure,
+  recordAuthSuccess,
+  retryAfterSeconds,
+} from "@/lib/auth-throttle";
+import {
   AUTH_COOKIE_NAME,
   AUTH_SESSION_MAX_AGE_SECONDS,
   MIN_AUTH_PASSWORD_LENGTH,
@@ -33,6 +39,20 @@ export async function POST(request: Request) {
     );
   }
 
+  const retryAfterMs = getAuthRetryAfterMs();
+  if (retryAfterMs > 0) {
+    return NextResponse.json(
+      { error: "Too many login attempts. Try again shortly." },
+      {
+        status: 429,
+        headers: {
+          ...NO_STORE_HEADERS,
+          "Retry-After": String(retryAfterSeconds(retryAfterMs)),
+        },
+      },
+    );
+  }
+
   let candidate = "";
   try {
     const contentLength = Number(request.headers.get("content-length") ?? "0");
@@ -46,11 +66,20 @@ export async function POST(request: Request) {
   }
 
   if (!passwordsMatch(candidate, configuredPassword)) {
+    const delayMs = recordAuthFailure();
     return NextResponse.json(
       { error: "Invalid password" },
-      { status: 401, headers: NO_STORE_HEADERS },
+      {
+        status: 401,
+        headers: {
+          ...NO_STORE_HEADERS,
+          "Retry-After": String(retryAfterSeconds(delayMs)),
+        },
+      },
     );
   }
+
+  recordAuthSuccess();
 
   const response = NextResponse.json({ success: true }, { headers: NO_STORE_HEADERS });
   response.cookies.set({

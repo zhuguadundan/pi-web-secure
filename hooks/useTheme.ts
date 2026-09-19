@@ -45,6 +45,7 @@ function resolveTheme(preference: ThemePreference): ResolvedTheme {
 function applyDomTheme(theme: ResolvedTheme): void {
   if (typeof document === "undefined") return;
   document.documentElement.classList.toggle("dark", theme === "dark");
+  document.documentElement.style.colorScheme = theme;
 }
 
 function ensureState(): ThemeState {

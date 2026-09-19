@@ -46,6 +46,14 @@ The current enhanced release is based on upstream `agegr/pi-web` v0.8.0 plus the
 - Ignores stale upload results if the user changes working directory while a request is still running.
 - Retains server-side validation for unsafe names, traversal attempts, conflict strategies, and disallowed roots.
 
+### Session search, models, and appearance
+
+- Sidebar search scans recent session text and jumps to the matching conversation.
+- The Models page can set the default model for new sessions (`~/.pi/agent/settings.json`).
+- Theme control is an explicit Light / Dark / System menu instead of a hidden cycle.
+- Custom providers can fetch a remote model list and fill empty catalog fields.
+- The project picker includes a server-side directory browser.
+
 ### Workspace and launch behavior
 
 - Adds four fixed project-picker shortcuts derived from the server user's home directory: `home`, `code`, `work`, and `super`.

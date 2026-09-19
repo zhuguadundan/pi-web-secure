@@ -118,6 +118,13 @@ export async function GET(
 ) {
   const { id } = await params;
   try {
+    const searchParams = new URL(req.url).searchParams;
+    const force = searchParams.get("force") === "1";
+    const liveWrapper = getRpcSession(id);
+    if (force && liveWrapper?.isAlive()) {
+      liveWrapper.evictIfDiskAhead();
+    }
+
     const filePath = await resolveSessionPath(id);
     if (!filePath) {
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
@@ -127,7 +134,6 @@ export async function GET(
     const entries = sm.getEntries() as never;
     const leafId = sm.getLeafId();
     const tree = projectTreeForResponse(sm.getTree());
-    const searchParams = new URL(req.url).searchParams;
     const deferThinking = searchParams.has("deferThinking");
     const deferToolResultImages = searchParams.has("deferMedia");
     const context = buildSessionContext(entries, leafId, { deferThinking, deferToolResultImages });

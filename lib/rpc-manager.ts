@@ -3,7 +3,8 @@ import { KeybindingsManager as TuiKeybindingsManager, TUI_KEYBINDINGS } from "@e
 import { randomUUID } from "crypto";
 import { existsSync, writeFileSync } from "fs";
 import { invalidateModelsCache } from "./models-cache";
-import { cacheSessionPath, invalidateSessionListCache } from "./session-reader";
+import { cacheSessionPath, invalidateSessionListCache, readLatestSessionEntryId } from "./session-reader";
+import { resolveSessionIdleTimeoutMs } from "./session-idle-timeout";
 import type { SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 import type { AgentSessionLike, ExtensionUiContextLike, ToolInfo } from "./pi-types";
 import type { ExtensionUiRequest, ExtensionUiResponse, ExtensionWidgetItem } from "./types";
@@ -87,6 +88,7 @@ class PlainTextTheme extends Theme {
 
 const PLAIN_TEXT_THEME = new PlainTextTheme();
 const CUSTOM_UI_KEYBINDINGS = new TuiKeybindingsManager(TUI_KEYBINDINGS);
+const SESSION_IDLE_TIMEOUT_MS = resolveSessionIdleTimeoutMs();
 
 function withExtensionTools(session: AgentSessionLike, toolNames: string[]): string[] {
   if (toolNames.length === 0) return [];
@@ -255,13 +257,25 @@ export class AgentSessionWrapper {
 
   private resetIdleTimer(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
+    if (SESSION_IDLE_TIMEOUT_MS === 0) return;
     this.idleTimer = setTimeout(() => {
       if (this.isRunning()) {
         this.resetIdleTimer();
         return;
       }
       this.destroy();
-    }, 10 * 60 * 1000);
+    }, SESSION_IDLE_TIMEOUT_MS);
+  }
+
+  /** Drop an idle wrapper whose on-disk file has entries this process never wrote. */
+  evictIfDiskAhead(): boolean {
+    if (!this._alive || this.isRunning()) return false;
+    const latest = readLatestSessionEntryId(this.sessionFile);
+    if (!latest) return false;
+    const known = this.inner.sessionManager.getEntries().some((entry) => entry.id === latest);
+    if (known) return false;
+    this.destroy();
+    return true;
   }
 
   private persistBashOnlySession(): void {
